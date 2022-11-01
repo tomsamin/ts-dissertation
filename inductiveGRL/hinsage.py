@@ -66,8 +66,8 @@ class HinSAGE_Representation_Learner:
         train_labels = label.loc[train_node_identifiers]
         validation_node_identifiers = node_identifiers[round(0.8*len(node_identifiers)):]
         validation_labels = label.loc[validation_node_identifiers]
-        generator = HinSAGENodeGenerator(S, batch_size, self.num_samples, self.time_step, head_node_type= self.embedding_for_node_type)
-        train_gen = generator.flow(train_node_identifiers, train_labels, shuffle=False)
+        generator = HinSAGENodeGenerator(S, batch_size, self.num_samples, head_node_type=self.embedding_for_node_type)
+        train_gen = generator.flow(train_node_identifiers, train_labels, shuffle=True)
         test_gen = generator.flow(validation_node_identifiers, validation_labels)
 
         # HinSAGE model

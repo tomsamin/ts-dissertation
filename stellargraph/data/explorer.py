@@ -1258,17 +1258,7 @@ class TimeSampledHeterogeneousBreadthFirstWalk(GraphWalk):
                         # Create samples of neigbhours for all edge types
                         for et in current_edge_types:
                             neigh_et = adj[et][current_node]
-                            ## TS: Insert logic here to remove any neighbours from the future.
-                            ## check the node id to see the time step is before the head node.
-                            # print("All neighbours:", neigh_et)
-                            for neigh_node in neigh_et:
-                                neigh_node_step = int(self.graph.node_features([neigh_node],
-                                        self.graph.node_type(neigh_node, use_ilocs=True),
-                                        use_ilocs=True)[0,0])
-                                if neigh_node_step > root_node_time_step:
-                                    # print("neighbour:", neigh_node, neigh_node_step, "Root:", root_node_time_step)
-                                    neigh_et.remove(neigh_node)
-                            # print("Removed neighbours", neigh_et)
+                    
                             # If there are no neighbours of this type then we return None
                             # in the place of the nodes that would have been sampled
                             # YT update: with the new way to get neigh_et from
@@ -1276,20 +1266,32 @@ class TimeSampledHeterogeneousBreadthFirstWalk(GraphWalk):
                             # In case of no neighbours of the current node for et, neigh_et == [None],
                             # and samples automatically becomes [None]*n_size[depth-1]
                             if len(neigh_et) > 0:
-                                samples = rs.choices(neigh_et, k=n_size[depth - 1])
+                                pre_samples = rs.choices(neigh_et, k=n_size[depth - 1])
                             else:  # this doesn't happen anymore, see the comment above
                                 _size = n_size[depth - 1]
                                 samples = [-1] * _size
-
+                            ## TS: Insert logic here to remove any neighbours from the future.
+                            ## check the node id to see the time step is before the head node.
+                            #print("1:", pre_samples)
+                            samples=[]
+                            for node in pre_samples:
+                                neigh_node_step = self.graph.node_features([node],
+                                    self.graph.node_type(node, use_ilocs=True),
+                                        use_ilocs=True)[0,0]
+                                if neigh_node_step <= root_node_time_step:
+                                    samples.append(node)
+                                else:
+                                    samples.append(-1)
+                            #print("2:", samples)
                             walk.append(samples)
-                            #print(self.graph.node_features([samples[0]], node_type, use_ilocs=True))
+
                             q.extend(
                                 [
                                     (sampled_node, et.n2, depth)
                                     for sampled_node in samples
                                 ]
                             )
-
+                
                 # finished i-th walk from node so add it to the list of walks as a list
                 walks.append(walk)
 

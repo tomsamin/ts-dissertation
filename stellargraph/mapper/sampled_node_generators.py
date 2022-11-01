@@ -481,7 +481,6 @@ class HinSAGENodeGenerator(BatchedNodeGenerator):
         G,
         batch_size,
         num_samples,
-        time_step,
         head_node_type=None,
         schema=None,
         seed=None,
@@ -491,7 +490,6 @@ class HinSAGENodeGenerator(BatchedNodeGenerator):
 
         self.num_samples = num_samples
         self.name = name
-        self.time_step = time_step
 
         # The head node type
         if head_node_type is None:
