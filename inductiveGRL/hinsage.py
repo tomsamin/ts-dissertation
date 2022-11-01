@@ -32,12 +32,11 @@ class HinSAGE_Representation_Learner:
     """
 
 
-    def __init__(self, embedding_size, num_samples, embedding_for_node_type, time_step):
+    def __init__(self, embedding_size, num_samples, embedding_for_node_type):
 
         self.embedding_size = embedding_size
         self.num_samples = num_samples
         self.embedding_for_node_type = embedding_for_node_type
-        self.time_step = time_step
 
 
     def train_hinsage(self, S, node_identifiers, label, batch_size, epochs):
@@ -118,7 +117,7 @@ class HinSAGE_Representation_Learner:
         """
 
         # The mapper feeds data from sampled subgraph to HinSAGE model
-        generator = HinSAGENodeGenerator(S, batch_size, self.num_samples, self.time_step, head_node_type=self.embedding_for_node_type)
+        generator = HinSAGENodeGenerator(S, batch_size, self.num_samples, head_node_type=self.embedding_for_node_type)
         test_gen_not_shuffled = generator.flow(inductive_node_identifiers, shuffle=False )
 
         inductive_emb = trained_model.predict(test_gen_not_shuffled, verbose=1)
