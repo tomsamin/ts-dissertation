@@ -21,6 +21,7 @@ __all__ = [
     "SampledBreadthFirstWalk",
     "SampledHeterogeneousBreadthFirstWalk",
     "TimeSampledHeterogeneousBreadthFirstWalk",
+    "NrecentHeterogeneousBreadthFirstWalk",
     "TemporalRandomWalk",
     "DirectedBreadthFirstNeighbours",
 ]
@@ -1198,6 +1199,7 @@ class TemporalRandomWalk(GraphWalk):
 
         return walk
 
+
 class TimeSampledHeterogeneousBreadthFirstWalk(GraphWalk):
     """
     Breadth First Walk for heterogeneous graphs that generates a sampled number of paths from a starting node.
@@ -1285,6 +1287,113 @@ class TimeSampledHeterogeneousBreadthFirstWalk(GraphWalk):
                             #print("2:", samples)
                             walk.append(samples)
 
+                            q.extend(
+                                [
+                                    (sampled_node, et.n2, depth)
+                                    for sampled_node in samples
+                                ]
+                            )
+                
+                # finished i-th walk from node so add it to the list of walks as a list
+                walks.append(walk)
+
+        return walks
+
+
+class NrecentHeterogeneousBreadthFirstWalk(GraphWalk):
+    """
+    Breadth First Walk for heterogeneous graphs that generates a sampled number of paths from a starting node.
+    It can be used to extract a random sub-graph starting from a set of initial nodes.
+    Modified by Thomas Saminaden to try and remove future information from the sample in HinSAGE.
+    """
+
+    def run(self, nodes, n_size, n=1, seed=None):
+        """
+        Performs a sampled breadth-first walk starting from the root nodes.
+
+        Args:
+            nodes (list): A list of root node ids such that from each node n BFWs will be generated
+                with the number of samples per hop specified in n_size.
+            n_size (int): The number of neighbouring nodes to expand at each depth of the walk. Sampling of
+            n (int, default 1): Number of walks per node id. Neighbours with replacement is always used regardless
+                of the node degree and number of neighbours requested.
+            seed (int, optional): Random number generator seed; default is None
+
+        Returns:
+            A list of lists such that each list element is a sequence of ids corresponding to a sampled Heterogeneous
+            BFW.
+        """
+        self._check_sizes(n_size)
+        self._check_common_parameters(nodes, n, len(n_size), seed)
+        rs, _ = self._get_random_state(seed)
+
+        adj = self.get_adjacency_types()
+
+        walks = []
+        d = len(n_size)  # depth of search
+
+        for node in nodes:  # iterate over root nodes
+            for _ in range(n):  # do n bounded breadth first walks from each root node
+                q = list()  # the queue of neighbours
+                walk = list()  # the list of nodes in the subgraph of node
+
+                # Start the walk by adding the head node, and node type to the frontier list q
+                node_type = self.graph.node_type(node, use_ilocs=True)
+                
+                ## TS: Insert logic here to capture the head nodes time step
+                ## This is to ensure future nodes are not sampled.
+                root_node_time_step = int(self.graph.node_features([node], node_type, use_ilocs=True)[0,0])
+                q.extend([(node, node_type, 0)])
+
+                # add the root node to the walks
+                walk.append([node])
+                while len(q) > 0:
+                    # remove the top element in the queue and pop the item from the front of the list
+                    frontier = q.pop(0)
+                    current_node, current_node_type, depth = frontier
+                    depth = depth + 1  # the depth of the neighbouring nodes
+
+                    # consider the subgraph up to and including depth d from root node
+                    if depth <= d:
+                        # Find edge types for current node type
+                        current_edge_types = self.graph_schema.schema[current_node_type]
+
+                        # Create samples of neigbhours for all edge types
+                        for et in current_edge_types:
+                            neigh_et = adj[et][current_node]
+                            
+                            # If there are no neighbours of this type then we return None
+                            # in the place of the nodes that would have been sampled
+                            # YT update: with the new way to get neigh_et from
+                            # adj[et][current_node], len(neigh_et) is always > 0.
+                            # In case of no neighbours of the current node for et, neigh_et == [None],
+                            # and samples automatically becomes [None]*n_size[depth-1]
+                            neigh_node_tuples = list()
+                            
+                            if len(neigh_et) > 0:
+                                for node in neigh_et:
+                                    neigh_node_step = self.graph.node_features([node],
+                                    self.graph.node_type(node, use_ilocs=True),
+                                        use_ilocs=True)[0,0]
+                                    if neigh_node_step <= root_node_time_step:
+                                        neigh_node_tuples.append((node, neigh_node_step))
+                                neigh_node_tuples.sort(key=lambda tuple: tuple[1], reverse=True)
+                                
+                                if neigh_node_tuples == []:
+                                    _size = n_size[depth - 1]
+                                    samples = [-1] * _size
+                                else:
+                                    pre_samples = list()
+                                    # if there are less than the required sampled then make the sample all neighbours
+                                    if len(neigh_node_tuples) <= n_size[depth - 1]:
+                                        for i in range(len(neigh_node_tuples)):
+                                            pre_samples.append(neigh_node_tuples[i][0])
+                                    else:
+                                        for i in range(n_size[depth - 1]):
+                                            pre_samples.append(neigh_node_tuples[i][0])
+                                    samples = rs.choices(pre_samples, k=n_size[depth - 1])
+                            walk.append(samples)
+                            
                             q.extend(
                                 [
                                     (sampled_node, et.n2, depth)
