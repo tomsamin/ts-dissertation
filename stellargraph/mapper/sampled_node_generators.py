@@ -26,6 +26,7 @@ __all__ = [
     "Attri2VecNodeGenerator",
     "Node2VecNodeGenerator",
     "DirectedGraphSAGENodeGenerator",
+    "TimeWeightedHinSAGENodeGenerator"
 ]
 
 import warnings
@@ -47,6 +48,7 @@ from ..data import (
     SampledHeterogeneousBreadthFirstWalk,
     TimeSampledHeterogeneousBreadthFirstWalk,
     NrecentHeterogeneousBreadthFirstWalk,
+    TimeWeightedHeterogeneousBreadthFirstWalk,
     DirectedBreadthFirstNeighbours,
 )
 from ..core.graph import StellarGraph, GraphSchema
@@ -1009,6 +1011,149 @@ class NrecentHinSAGENodeGenerator(BatchedNodeGenerator):
         # Get sampled nodes
         node_samples = self.sampler.run(nodes=head_nodes, n=1, n_size=self.num_samples)
         
+        # Reshape node samples to the required format for the HinSAGE model
+        # This requires grouping the sampled nodes by edge type and in order
+        nodes_by_type = [
+            (
+                nt,
+                reduce(
+                    operator.concat,
+                    (samples[ks] for samples in node_samples for ks in indices),
+                    [],
+                ),
+            )
+            for nt, indices in self._sampling_schema[0]
+        ]
+
+        # Get features
+        batch_feats = [
+            self.graph.node_features(layer_nodes, nt, use_ilocs=True)
+            for nt, layer_nodes in nodes_by_type
+        ]
+
+        # Resize features to (batch_size, n_neighbours, feature_size)
+        batch_feats = [
+            np.reshape(a, (len(head_nodes), -1 if np.size(a) > 0 else 0, a.shape[1]))
+            for a in batch_feats
+        ]
+
+        return batch_feats
+
+    def default_corrupt_input_index_groups(self):
+        # every sample of a given node type can be grouped together
+        indices_per_nt = defaultdict(list)
+        for tensor_idx, (nt, _) in enumerate(self._sampling_schema[0]):
+            indices_per_nt[nt].append(tensor_idx)
+
+        # ensure there's a consistent order both within each group, and across groups, ensure the
+        # shuffling is deterministic (at least with respect to the model)
+        return sorted(sorted(idx) for idx in indices_per_nt.values())
+
+
+class TimeWeightedHinSAGENodeGenerator(BatchedNodeGenerator):
+    """Keras-compatible data mapper for Heterogeneous GraphSAGE (HinSAGE)
+
+    At minimum, supply the StellarGraph, the batch size, and the number of
+    node samples for each layer of the HinSAGE model.
+
+    The supplied graph should be a StellarGraph object with node features for all node types.
+
+    Use the :meth:`flow` method supplying the nodes and (optionally) targets
+    to get an object that can be used as a Keras data generator.
+
+    Note that the shuffle argument should be True for training and
+    False for prediction.
+
+    .. seealso::
+
+       Model using this generator: :class:`.HinSAGE`.
+
+       Example using this generator: `unsupervised representation learning via Deep Graph Infomax <https://stellargraph.readthedocs.io/en/stable/demos/embeddings/deep-graph-infomax-embeddings.html>`_.
+
+       Related functionality:
+
+       - :class:`.CorruptedGenerator` for unsupervised training using :class:`.DeepGraphInfomax`
+       - :class:`.HinSAGELinkGenerator` for link prediction and related tasks
+       - :class:`.GraphSAGENodeGenerator` for homogeneous graphs
+       - :class:`.DirectedGraphSAGENodeGenerator` for directed homogeneous graphs
+
+    Args:
+        G (StellarGraph): The machine-learning ready graph
+        batch_size (int): Size of batch to return
+        num_samples (list): The number of samples per layer (hop) to take
+        head_node_type (str, optional): The node type that will be given to the generator using the
+            `flow` method, the model will expect this node type. This does not need to be specified
+            if ``G`` has only one node type.
+        schema (GraphSchema, optional): Graph schema for G.
+        seed (int, optional): Random seed for the node sampler
+
+    Example::
+
+         G_generator = HinSAGENodeGenerator(G, 50, [10,10])
+         train_data_gen = G_generator.flow(train_node_ids, train_node_labels)
+         test_data_gen = G_generator.flow(test_node_ids)
+
+     """
+
+    def __init__(
+        self,
+        G,
+        batch_size,
+        num_samples,
+        head_node_type=None,
+        schema=None,
+        seed=None,
+        name=None,
+    ):
+        super().__init__(G, batch_size, schema=schema)
+
+        self.num_samples = num_samples
+        self.name = name
+
+        # The head node type
+        if head_node_type is None:
+            # infer the head node type, if this is a homogeneous-node graph
+            head_node_type = G.unique_node_type(
+                "head_node_type: expected a head node type because G has more than one node type, found node types: %(found)s"
+            )
+
+        if head_node_type not in self.schema.node_types:
+            raise KeyError("Supplied head node type must exist in the graph")
+        self.head_node_types = [head_node_type]
+
+        # Create sampling schema
+        self._sampling_schema = self.schema.sampling_layout(
+            self.head_node_types, self.num_samples
+        )
+        self._type_adjacency_list = self.schema.type_adjacency_list(
+            self.head_node_types, len(self.num_samples)
+        )
+
+        # Create sampler for HinSAGE
+        self.sampler = TimeWeightedHeterogeneousBreadthFirstWalk(
+            G, graph_schema=self.schema, seed=seed
+        )
+
+    def sample_features(self, head_nodes, batch_num):
+        """
+        Sample neighbours recursively from the head nodes, collect the features of the
+        sampled nodes, and return these as a list of feature arrays for the GraphSAGE
+        algorithm.
+
+        Args:
+            head_nodes: An iterable of head nodes to perform sampling on.
+            batch_num (int): Batch number
+
+        Returns:
+            A list of the same length as ``num_samples`` of collected features from
+            the sampled nodes of shape:
+            ``(len(head_nodes), num_sampled_at_layer, feature_size)``
+            where ``num_sampled_at_layer`` is the cumulative product of ``num_samples``
+            for that layer.
+        """
+        # Get sampled nodes
+        node_samples = self.sampler.run(nodes=head_nodes, n=1, n_size=self.num_samples)
+
         # Reshape node samples to the required format for the HinSAGE model
         # This requires grouping the sampled nodes by edge type and in order
         nodes_by_type = [
