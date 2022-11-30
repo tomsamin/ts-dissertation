@@ -1328,6 +1328,21 @@ class NrecentHeterogeneousBreadthFirstWalk(GraphWalk):
         rs, _ = self._get_random_state(seed)
 
         adj = self.get_adjacency_types()
+        types = ["customer", "merchant", "transaction"]
+        
+        for node_type in types:
+            edge_types = self.graph_schema.schema[node_type]
+            for edge_type in edge_types:
+                for node in list(adj[edge_type]):
+                    if isinstance(adj[edge_type][node], dict):
+                        break
+                    else:
+                        neigh_node_type = self.graph.node_type(adj[edge_type][node][0], use_ilocs=True)
+                        neigh_node_tuples = list(zip(adj[edge_type][node], self.graph.node_features(adj[edge_type][node], neigh_node_type, use_ilocs=True)[:,0]))
+                        neigh_node_tuples.sort(key=lambda tuple: tuple[1], reverse=True)
+                        adj[edge_type][node] = {'nodes': [node for node, _ in neigh_node_tuples],
+                                                'times': [times for _, times in neigh_node_tuples]}
+
 
         walks = []
         d = len(n_size)  # depth of search
@@ -1360,7 +1375,8 @@ class NrecentHeterogeneousBreadthFirstWalk(GraphWalk):
 
                         # Create samples of neigbhours for all edge types
                         for et in current_edge_types:
-                            neigh_et = adj[et][current_node]
+                            neigh_et = adj[et][current_node]['nodes']
+                            neigh_et_steps = adj[et][current_node]['times']
                             
                             # If there are no neighbours of this type then we return None
                             # in the place of the nodes that would have been sampled
@@ -1368,32 +1384,29 @@ class NrecentHeterogeneousBreadthFirstWalk(GraphWalk):
                             # adj[et][current_node], len(neigh_et) is always > 0.
                             # In case of no neighbours of the current node for et, neigh_et == [None],
                             # and samples automatically becomes [None]*n_size[depth-1]
-                            neigh_node_tuples = list()
-                            
                             if len(neigh_et) > 0:
-                                for node in neigh_et:
-                                    neigh_node_step = self.graph.node_features([node],
-                                    self.graph.node_type(node, use_ilocs=True),
-                                        use_ilocs=True)[0,0]
-                                    if neigh_node_step <= root_node_time_step:
-                                        neigh_node_tuples.append((node, neigh_node_step))
-                                neigh_node_tuples.sort(key=lambda tuple: tuple[1], reverse=True)
-                                
-                                if neigh_node_tuples == []:
-                                    _size = n_size[depth - 1]
-                                    samples = [-1] * _size
-                                else:
-                                    pre_samples = list()
-                                    # if there are less than the required sampled then make the sample all neighbours
-                                    if len(neigh_node_tuples) <= n_size[depth - 1]:
-                                        for i in range(len(neigh_node_tuples)):
-                                            pre_samples.append(neigh_node_tuples[i][0])
-                                    else:
-                                        for i in range(n_size[depth - 1]):
-                                            pre_samples.append(neigh_node_tuples[i][0])
-                                    samples = rs.choices(pre_samples, k=n_size[depth - 1])
+                                if neigh_et_steps[0] > root_node_time_step:
+                                    root_node_time_step_idx = 0
+                                    for i in range(len(neigh_et_steps)):
+                                        if (neigh_et_steps[i] <= root_node_time_step):
+                                            root_node_time_step_idx = i
+                                            break
+                                    if len(neigh_et[root_node_time_step_idx:root_node_time_step_idx+n_size[depth-1]]) == n_size[depth-1]:
+                                        samples = neigh_et[root_node_time_step_idx:root_node_time_step_idx+n_size[depth-1]]
+                                    else: 
+                                        #print("idx", root_node_time_step_idx, "step", root_node_time_step, neigh_et, neigh_et_steps)
+                                        samples = rs.choices(neigh_et[root_node_time_step_idx:], k=n_size[depth-1])
+                                else: 
+                                    if len(neigh_et[0:n_size[depth-1]]) == n_size[depth-1]:
+                                        samples = neigh_et[0:n_size[depth-1]]
+                                    else: 
+                                        samples = rs.choices(neigh_et, k=n_size[depth-1])
+                            else:  # this doesn't happen anymore, see the comment above
+                                _size = n_size[depth - 1]
+                                samples = [-1] * _size
+
                             walk.append(samples)
-                            
+
                             q.extend(
                                 [
                                     (sampled_node, et.n2, depth)
