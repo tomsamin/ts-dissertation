@@ -9,7 +9,7 @@ Created on Wed Jun 10 11:45:24 2020
 
 from stellargraph.layer import HinSAGE
 from stellargraph.mapper import HinSAGENodeGenerator, NodeSequence
-from stellargraph.mapper import TimeHinSAGENodeGenerator, NrecentHinSAGENodeGenerator, TimeWeightedHinSAGENodeGenerator
+from stellargraph.mapper import TimeHinSAGENodeGenerator, NrecentHinSAGENodeGenerator, TimeWeightedHinSAGENodeGenerator, NrecentfastHinSAGENodeGenerator
 from keras import layers
 from tensorflow.keras import layers, optimizers, Model
 from tensorflow.keras.losses import binary_crossentropy
@@ -343,6 +343,123 @@ class HinSAGE_Representation_Learner_Not_TB:
 
         # The mapper feeds data from sampled subgraph to HinSAGE model
         generator = TimeHinSAGENodeGenerator(S, batch_size, self.num_samples, head_node_type=self.embedding_for_node_type)
+        test_gen_not_shuffled = generator.flow(inductive_node_identifiers, shuffle=False )
+
+        inductive_emb = trained_model.predict(test_gen_not_shuffled, verbose=1)
+        inductive_emb = pd.DataFrame(inductive_emb, index=inductive_node_identifiers)
+
+        return inductive_emb
+
+
+class HinSAGE_Representation_Learner_Nrecentfast:
+
+    """
+    This class initializes a graphsage framework but is modified to sample with the N most recent nodes 
+    rather than temporally blind uniform sampling
+
+    Parameters
+    ----------
+    embedding_size : int
+        The desired size of the resulting embeddings
+    num_samples : list
+        The length of the list defines the depth of random walks, the values of the list
+        define the number of nodes to sample per neighborhood.
+    embedding_for_node_type: str
+        String identifying the node type for which we want graphsage to generate embeddings.
+
+    """
+
+
+    def __init__(self, embedding_size, num_samples, embedding_for_node_type, S, batch_size, start_time, end_time):
+
+        self.embedding_size = embedding_size
+        self.num_samples = num_samples
+        self.embedding_for_node_type = embedding_for_node_type
+        self.start_time = start_time
+        self.end_time = end_time
+
+        # HinSAGE model
+        generator = NrecentfastHinSAGENodeGenerator(S, batch_size, self.num_samples, head_node_type=self.embedding_for_node_type, start_time=self.start_time, end_time=self.end_time)
+        self.model = HinSAGE(layer_sizes=[self.embedding_size]*len(self.num_samples), generator=generator, dropout=0)
+        x_inp, x_out = self.model.build()
+
+        # Final estimator layer
+        prediction = layers.Dense(units=1, activation="sigmoid", dtype='float32')(x_out)
+
+        # Create Keras model for training
+        self.model = Model(inputs=x_inp, outputs=prediction)
+        self.model.compile(
+        optimizer=optimizers.Adam(lr=1e-3),
+             loss=binary_crossentropy,
+            )
+
+
+    def train_hinsage(self, S, node_identifiers, label, batch_size, epochs, start_time, end_time):
+
+        """
+
+        This function trains a HinSAGE model, implemented in Tensorflow.
+        It returns the trained HinSAGE model and a pandas datarame containing the embeddings generated for the train nodes.
+
+        Parameters
+        ----------
+        S : StellarGraph Object
+            The graph on which HinSAGE trains its aggregator functions.
+        node_identifiers : list
+            Defines the nodes that HinSAGE uses to train its aggregation functions.
+        label: Pandas dataframe
+            Defines the label of the nodes used for training, with the index representing the nodes.
+        batch_size: int
+            batch size to train the neural network in which HinSAGE is implemented.
+        epochs: int
+            Number of epochs for the neural network.
+
+        """
+        # The mapper feeds data from sampled subgraph to GraphSAGE model
+        train_node_identifiers = node_identifiers[:round(0.8*len(node_identifiers))]
+        train_labels = label.loc[train_node_identifiers]
+        validation_node_identifiers = node_identifiers[round(0.8*len(node_identifiers)):]
+        validation_labels = label.loc[validation_node_identifiers]
+        generator = NrecentfastHinSAGENodeGenerator(S, batch_size, self.num_samples, head_node_type=self.embedding_for_node_type, start_time=start_time, end_time=end_time)
+        train_gen = generator.flow(train_node_identifiers, train_labels, shuffle=True)
+        test_gen = generator.flow(validation_node_identifiers, validation_labels)
+
+        
+
+        # Train Model
+        self.model.fit(
+        train_gen, epochs=epochs, verbose=1, validation_data=test_gen, shuffle=False
+        )
+
+        train_gen_not_shuffled = generator.flow( node_identifiers, label, shuffle=False)
+        embeddings_train = self.model.predict(train_gen_not_shuffled)
+
+        train_emb = pd.DataFrame(embeddings_train,  index=node_identifiers)
+
+        return self.model, train_emb
+
+    def inductive_step_hinsage(self, S, trained_model, inductive_node_identifiers, batch_size, start_time, end_time):
+
+        """
+
+        This function generates embeddings for unseen nodes using a trained hinsage model.
+        It returns the embeddings for these unseen nodes.
+
+        Parameters
+        ----------
+        S : StellarGraph Object
+            The graph on which HinSAGE is deployed.
+        trained_model : Neural Network
+            The trained hinsage model, containing the trained and optimized aggregation functions per depth.
+        inductive_node_identifiers : list
+            Defines the nodes that HinSAGE needs to generate embeddings for
+        batch_size: int
+            batch size for the neural network in which HinSAGE is implemented.
+
+        """
+
+        # The mapper feeds data from sampled subgraph to HinSAGE model
+        generator = NrecentfastHinSAGENodeGenerator(S, batch_size, self.num_samples, head_node_type=self.embedding_for_node_type, start_time=start_time, end_time=end_time)
         test_gen_not_shuffled = generator.flow(inductive_node_identifiers, shuffle=False )
 
         inductive_emb = trained_model.predict(test_gen_not_shuffled, verbose=1)
