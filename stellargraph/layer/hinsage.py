@@ -33,7 +33,9 @@ import operator as op
 import warnings
 
 from .misc import deprecated_model_function
-from ..mapper import NrecentHinSAGENodeGenerator, NrecentfastHinSAGENodeGenerator, TimeHinSAGENodeGenerator, HinSAGENodeGenerator, HinSAGELinkGenerator, TimeWeightedHinSAGENodeGenerator
+from ..mapper import NrecentHinSAGENodeGenerator, NrecentfastHinSAGENodeGenerator, TimeHinSAGENodeGenerator
+from ..mapper import HinSAGENodeGenerator, HinSAGELinkGenerator, TimeWeightedHinSAGENodeGenerator
+from ..mapper import NrecentfastFilterHinSAGENodeGenerator
 
 HinSAGEAggregator = Layer
 
@@ -439,7 +441,7 @@ class HinSAGE:
         Args:
              generator: The supplied generator.
         """
-        if not isinstance(generator, (HinSAGELinkGenerator, HinSAGENodeGenerator, TimeHinSAGENodeGenerator, NrecentHinSAGENodeGenerator, TimeWeightedHinSAGENodeGenerator, NrecentfastHinSAGENodeGenerator)):
+        if not isinstance(generator, (HinSAGELinkGenerator, HinSAGENodeGenerator, TimeHinSAGENodeGenerator, NrecentHinSAGENodeGenerator, TimeWeightedHinSAGENodeGenerator, NrecentfastHinSAGENodeGenerator, NrecentfastFilterHinSAGENodeGenerator)):
             errmsg = "Generator should be an instance of HinSAGELinkGenerator or HinSAGENodeGenerator"
             if isinstance(generator, (NodeSequence, LinkSequence)):
                 errmsg = (

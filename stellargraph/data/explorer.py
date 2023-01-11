@@ -23,6 +23,7 @@ __all__ = [
     "TimeSampledHeterogeneousBreadthFirstWalk",
     "NrecentHeterogeneousBreadthFirstWalk",
     "NrecentfastHeterogeneousBreadthFirstWalk",
+    "NrecentfastFilterHeterogeneousBreadthFirstWalk",
     "TimeWeightedHeterogeneousBreadthFirstWalk",
     "TemporalRandomWalk",
     "DirectedBreadthFirstNeighbours",
@@ -1210,7 +1211,7 @@ class TimeSampledHeterogeneousBreadthFirstWalk(GraphWalk):
     Modified by Thomas Saminaden to try and remove future information from the sample in HinSAGE.
     """
 
-    def run(self, nodes, n_size, n=1, seed=None):
+    def run(self, nodes, n_size, start_time, end_time, n=1, seed=None):
         """
         Performs a sampled breadth-first walk starting from the root nodes.
 
@@ -1231,6 +1232,23 @@ class TimeSampledHeterogeneousBreadthFirstWalk(GraphWalk):
         rs, _ = self._get_random_state(seed)
 
         adj = self.get_adjacency_types()
+        types = ["customer", "merchant", "transaction"]
+
+        for node_type in types:
+            edge_types = self.graph_schema.schema[node_type]
+            for edge_type in edge_types:
+                for node in list(adj[edge_type]):
+                    if isinstance(adj[edge_type][node], dict):
+                        break
+                    else:
+                        neigh_node_type = self.graph.node_type(adj[edge_type][node][0], use_ilocs=True)
+                        neigh_node_tuples = list(zip(adj[edge_type][node], self.graph.node_features(adj[edge_type][node], neigh_node_type, use_ilocs=True)[:,0]))
+                        neigh_node_tuples.sort(key=lambda tuple: tuple[1], reverse=True)
+                        adj[edge_type][node] = dict()
+                        for i in range(start_time, end_time+1):
+                            adj[edge_type][node][i] = { 'nodes': [node for node, time in neigh_node_tuples if time <= i],
+                                                        'times': [time for _, time in neigh_node_tuples if time <= i] }
+
 
         walks = []
         d = len(n_size)  # depth of search
@@ -1262,8 +1280,9 @@ class TimeSampledHeterogeneousBreadthFirstWalk(GraphWalk):
 
                         # Create samples of neigbhours for all edge types
                         for et in current_edge_types:
-                            neigh_et = adj[et][current_node]
-                    
+                            neigh_et = adj[et][current_node][root_node_time_step]['nodes']
+                            #neigh_et_steps = adj[et][current_node][root_node_time_step]['times']
+
                             # If there are no neighbours of this type then we return None
                             # in the place of the nodes that would have been sampled
                             # YT update: with the new way to get neigh_et from
@@ -1271,22 +1290,22 @@ class TimeSampledHeterogeneousBreadthFirstWalk(GraphWalk):
                             # In case of no neighbours of the current node for et, neigh_et == [None],
                             # and samples automatically becomes [None]*n_size[depth-1]
                             if len(neigh_et) > 0:
-                                pre_samples = rs.choices(neigh_et, k=n_size[depth - 1])
+                                samples = rs.choices(neigh_et, k=n_size[depth - 1])
                             else:  # this doesn't happen anymore, see the comment above
                                 _size = n_size[depth - 1]
                                 samples = [-1] * _size
                             ## TS: Insert logic here to remove any neighbours from the future.
                             ## check the node id to see the time step is before the head node.
                             #print("1:", pre_samples)
-                            samples=[]
-                            for node in pre_samples:
-                                neigh_node_step = self.graph.node_features([node],
-                                    self.graph.node_type(node, use_ilocs=True),
-                                        use_ilocs=True)[0,0]
-                                if neigh_node_step <= root_node_time_step:
-                                    samples.append(node)
-                                else:
-                                    samples.append(-1)
+                            #samples=[]
+                            #for node in pre_samples:
+                            #    neigh_node_step = self.graph.node_features([node],
+                            #        self.graph.node_type(node, use_ilocs=True),
+                            #            use_ilocs=True)[0,0]
+                            #    if neigh_node_step <= root_node_time_step:
+                            #        samples.append(node)
+                            #    else:
+                            #        samples.append(-1)
                             #print("2:", samples)
                             walk.append(samples)
 
@@ -1401,6 +1420,132 @@ class NrecentfastHeterogeneousBreadthFirstWalk(GraphWalk):
                                 print("Current node", current_node)
                                 print(walk)
                                 print(adj[et][current_node])
+                                _size = n_size[depth - 1]
+                                samples = [-1] * _size
+
+                            walk.append(samples)
+
+                            q.extend(
+                                [
+                                    (sampled_node, et.n2, depth)
+                                    for sampled_node in samples
+                                ]
+                            )
+                
+                # finished i-th walk from node so add it to the list of walks as a list
+                walks.append(walk)
+
+        return walks
+
+
+class NrecentfastFilterHeterogeneousBreadthFirstWalk(GraphWalk):
+    """
+    Breadth First Walk for heterogeneous graphs that generates a sampled number of paths from a starting node.
+    It can be used to extract a random sub-graph starting from a set of initial nodes.
+    Modified by Thomas Saminaden to try and remove future information from the sample in HinSAGE.
+    """
+
+    def run(self, nodes, n_size, n=1, seed=None, start_time=0, end_time=7):
+        """
+        Performs a sampled breadth-first walk starting from the root nodes.
+        Args:
+            nodes (list): A list of root node ids such that from each node n BFWs will be generated
+                with the number of samples per hop specified in n_size.
+            n_size (int): The number of neighbouring nodes to expand at each depth of the walk. Sampling of
+            n (int, default 1): Number of walks per node id. Neighbours with replacement is always used regardless
+                of the node degree and number of neighbours requested.
+            seed (int, optional): Random number generator seed; default is None
+        Returns:
+            A list of lists such that each list element is a sequence of ids corresponding to a sampled Heterogeneous
+            BFW.
+        """
+        self._check_sizes(n_size)
+        self._check_common_parameters(nodes, n, len(n_size), seed)
+        rs, _ = self._get_random_state(seed)
+
+        adj = self.get_adjacency_types()
+        types = ["customer", "merchant", "transaction"]
+        
+        for node_type in types:
+            edge_types = self.graph_schema.schema[node_type]
+            for edge_type in edge_types:
+                for node in list(adj[edge_type]):
+                    if isinstance(adj[edge_type][node], dict):
+                        break
+                    else:
+                        neigh_node_type = self.graph.node_type(adj[edge_type][node][0], use_ilocs=True)
+                        if neigh_node_type == "transaction":
+                            neigh_node_tuples = list(zip(adj[edge_type][node], 
+                                                    self.graph.node_features(adj[edge_type][node], neigh_node_type, use_ilocs=True)[:,0], 
+                                                    self.graph.node_features(adj[edge_type][node], neigh_node_type, use_ilocs=True)[:,9]))
+
+                            neigh_node_tuples.sort(key=lambda tuple: tuple[1], reverse=True)
+                            adj[edge_type][node] = dict()
+                            for i in range(start_time, end_time+1):
+                                adj[edge_type][node][i] = { 'nodes': [node for node, time, category in neigh_node_tuples if (time <= i) and (category == 0)]}
+                        else:
+                            neigh_node_tuples = list(zip(adj[edge_type][node], 
+                                                    self.graph.node_features(adj[edge_type][node], neigh_node_type, use_ilocs=True)[:,0]))
+                            neigh_node_tuples.sort(key=lambda tuple: tuple[1], reverse=True)
+                            adj[edge_type][node] = dict()
+                            for i in range(start_time, end_time+1):
+                                adj[edge_type][node][i] = { 'nodes': [node for node, time in neigh_node_tuples if time <= i]}
+
+
+        walks = []
+        d = len(n_size)  # depth of search
+
+        for node in nodes:  # iterate over root nodes
+            for _ in range(n):  # do n bounded breadth first walks from each root node
+                q = list()  # the queue of neighbours
+                walk = list()  # the list of nodes in the subgraph of node
+
+                # Start the walk by adding the head node, and node type to the frontier list q
+                node_type = self.graph.node_type(node, use_ilocs=True)
+                
+                ## TS: Insert logic here to capture the head nodes time step
+                ## This is to ensure future nodes are not sampled.
+                root_node_time_step = int(self.graph.node_features([node], node_type, use_ilocs=True)[0,0])
+                q.extend([(node, node_type, 0)])
+
+                # add the root node to the walks
+                walk.append([node])
+                while len(q) > 0:
+                    # remove the top element in the queue and pop the item from the front of the list
+                    frontier = q.pop(0)
+                    current_node, current_node_type, depth = frontier
+                    depth = depth + 1  # the depth of the neighbouring nodes
+
+                    # consider the subgraph up to and including depth d from root node
+                    if depth <= d:
+                        # Find edge types for current node type
+                        current_edge_types = self.graph_schema.schema[current_node_type]
+
+                        # Create samples of neigbhours for all edge types
+                        for et in current_edge_types:
+                            try:
+                                neigh_et = adj[et][current_node][root_node_time_step]['nodes']
+                            except IndexError: 
+                                quit()
+                            
+                            # If there are no neighbours of this type then we return None
+                            # in the place of the nodes that would have been sampled
+                            # YT update: with the new way to get neigh_et from
+                            # adj[et][current_node], len(neigh_et) is always > 0.
+                            # In case of no neighbours of the current node for et, neigh_et == [None],
+                            # and samples automatically becomes [None]*n_size[depth-1]
+                            if len(neigh_et) > 0:
+                                if len(neigh_et) >= n_size[depth-1]:
+                                    samples = neigh_et[0:n_size[depth-1]]
+                                else:
+                                    samples = rs.choices(neigh_et, k=n_size[depth-1])
+                                
+                            else:  # this doesn't happen anymore, see the comment above
+                                #print("Root time", root_node_time_step)
+                                #print("Current node", current_node)
+                                #print(walk)
+                                #print(adj[et][current_node])
+                                
                                 _size = n_size[depth - 1]
                                 samples = [-1] * _size
 

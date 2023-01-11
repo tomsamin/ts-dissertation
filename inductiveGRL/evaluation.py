@@ -85,5 +85,5 @@ class Evaluation:
         # show the legend
         pyplot.legend()
         # show the plot
-        
+        #pyplot.show()
         print('Average precision-recall score XGBoost: {0:0.10f}'.format(average_precision_score(self.labels, probs)))
