@@ -10,7 +10,7 @@ Created on Wed Jun 10 11:45:24 2020
 from stellargraph.layer import HinSAGE
 from stellargraph.mapper import HinSAGENodeGenerator, NodeSequence
 from stellargraph.mapper import TimeHinSAGENodeGenerator, NrecentHinSAGENodeGenerator, TimeWeightedHinSAGENodeGenerator, NrecentfastHinSAGENodeGenerator, NrecentfastFilterHinSAGENodeGenerator
-from keras import layers
+#from keras import layers
 from tensorflow.keras import layers, optimizers, Model
 from tensorflow.keras.losses import binary_crossentropy
 import pandas as pd
